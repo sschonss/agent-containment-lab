@@ -27,7 +27,7 @@ def _excerpt(text: str) -> str:
     return flattened[:180]
 
 
-def run_curl(argv: list[str], timeout: int = 5) -> CurlProbe:
+def run_curl(argv: list[str], timeout: int = 5, dump_header: Path | None = None) -> CurlProbe:
     """Run curl. argv must already include URL and proxy flags. Do not pass secrets in argv."""
     with tempfile.TemporaryDirectory(prefix="lab-curl-") as tmp:
         body_path = Path(tmp) / "body"
@@ -42,8 +42,10 @@ def run_curl(argv: list[str], timeout: int = 5) -> CurlProbe:
             str(body_path),
             "-w",
             "%{http_code}",
-            *argv,
         ]
+        if dump_header is not None:
+            command.extend(["-D", str(dump_header)])
+        command.extend(argv)
         try:
             completed = subprocess.run(
                 command,
@@ -83,9 +85,8 @@ def run_curl(argv: list[str], timeout: int = 5) -> CurlProbe:
 
 def _classify(exit_code: int, http_status: int, body: str, stderr: str) -> str:
     combined = (body + " " + stderr).lower()
-    if "err_access_denied" in combined or http_status == 403 and "squid" in combined:
-        return "proxy_denied"
-    if http_status == 403:
+    # A GitHub 403 is a JSON API body. Only the Squid error page is an egress deny.
+    if "err_access_denied" in combined or (http_status == 403 and "squid" in combined):
         return "proxy_denied"
     if exit_code == 28 or "timed out" in combined or "operation timed out" in combined:
         return "timeout"
@@ -106,7 +107,7 @@ def command_for_log(probe: CurlProbe) -> str:
         if skip_next:
             skip_next = False
             continue
-        if arg in {"-o", "-w"}:
+        if arg in {"-o", "-w", "-D"}:
             skip_next = True
             continue
         if arg in {"-sS"}:

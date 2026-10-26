@@ -9,7 +9,9 @@ import unittest
 from pathlib import Path
 
 from lab.check_spans import main as check_spans_main
-from lab.credential import evaluate
+from lab.credential import evaluate, expiration_from_headers, resolve_repo, resolve_token
+from lab.emit_result import fallback_spans
+from lab.probes import _classify
 from lab.errors import ToolError
 from lab.mcp_client import McpClient
 from lab.plan import load_plan
@@ -183,12 +185,15 @@ class SpanCheckTests(unittest.TestCase):
 
 class CredentialTests(unittest.TestCase):
     def test_mock_without_token(self) -> None:
-        previous = {key: os.environ.get(key) for key in ("GITHUB_TOKEN", "GITHUB_REPO", "CREDENTIAL_MODE")}
+        keys = ("GITHUB_TOKEN", "GITHUB_REPO", "CREDENTIAL_MODE", "LAB_GITHUB_PAT")
+        previous = {key: os.environ.get(key) for key in keys}
         os.environ.pop("GITHUB_TOKEN", None)
+        os.environ.pop("LAB_GITHUB_PAT", None)
         os.environ.pop("GITHUB_REPO", None)
         os.environ["CREDENTIAL_MODE"] = "mock"
         try:
             result = evaluate()
+            self.assertEqual(resolve_repo(), "sschonss/agent-containment-lab")
         finally:
             for key, value in previous.items():
                 if value is None:
@@ -197,8 +202,58 @@ class CredentialTests(unittest.TestCase):
                     os.environ[key] = value
         self.assertTrue(result["mocked"])
         self.assertEqual(result["http_status"], 403)
+        self.assertEqual(result["read_status"], "skipped")
+        self.assertEqual(result["expiration"], "absent")
         self.assertEqual(result["source"], "mock")
         self.assertIn("synthesized locally", result["note"])
+
+    def test_pat_env_wins_and_mock_still_skips_the_network(self) -> None:
+        keys = ("GITHUB_TOKEN", "LAB_GITHUB_PAT", "CREDENTIAL_MODE")
+        previous = {key: os.environ.get(key) for key in keys}
+        os.environ["GITHUB_TOKEN"] = "github_pat_other"
+        os.environ["LAB_GITHUB_PAT"] = "github_pat_preferred"
+        os.environ["CREDENTIAL_MODE"] = "mock"
+        try:
+            self.assertEqual(resolve_token(), "github_pat_preferred")
+            result = evaluate()
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        self.assertTrue(result["mocked"])
+
+    def test_expiration_header(self) -> None:
+        headers = "HTTP/1.1 200 OK\r\nGitHub-Authentication-Token-Expiration: 2026-10-27 15:04:05 UTC\r\n"
+        self.assertEqual(expiration_from_headers(headers), "2026-10-27 15:04:05 UTC")
+        self.assertEqual(expiration_from_headers("HTTP/1.1 403\r\n"), "absent")
+
+
+class EgressClassifyTests(unittest.TestCase):
+    def test_github_403_is_not_a_proxy_deny(self) -> None:
+        body = '{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com"}'
+        self.assertEqual(_classify(0, 403, body, ""), "ok")
+        self.assertEqual(_classify(0, 403, "<html>ERR_ACCESS_DENIED</html>", ""), "proxy_denied")
+
+    def test_literal_ip_span(self) -> None:
+        spans = fallback_spans(
+            {
+                "error_kind": "name_resolution",
+                "literal_ip": {"error_kind": "network_unreachable", "detail": "OSError: [Errno 101] Network is unreachable"},
+            }
+        )
+        names = [name for name, _ in spans]
+        self.assertEqual(names, ["network.fallback", "network.fallback.literal"])
+        literal = spans[1][1]
+        self.assertIs(literal["egress.blocked"], True)
+        self.assertEqual(literal["error.kind"], "network_unreachable")
+        self.assertEqual(literal["http.host"], "192.0.2.1")
+        self.assertEqual(literal["network.mode"], "none")
+        self.assertNotIn("detail", literal)
+        cleaned = sanitize(literal)
+        self.assertEqual(cleaned["http.host"], "192.0.2.1")
+        self.assertNotIn("Errno", json.dumps(cleaned))
 
 
 if __name__ == "__main__":

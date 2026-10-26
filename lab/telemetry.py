@@ -24,7 +24,7 @@ def init_telemetry() -> str:
     sink = os.environ.get("SPAN_SINK", "").strip()
     if endpoint:
         # urllib honors HTTP(S)_PROXY. Telemetry must reach the collector directly.
-        extra = "otel-collector,localhost,127.0.0.1"
+        extra = "otel-collector,ollama,localhost,127.0.0.1"
         current = os.environ.get("NO_PROXY", "")
         merged = ",".join(part for part in (current, extra) if part)
         os.environ["NO_PROXY"] = merged

@@ -41,7 +41,7 @@ _ERROR_KINDS = {
     "invalid_token",
 }
 
-_HOSTS = {"attacker.example", "api.github.com", "example.com"}
+_HOSTS = {"attacker.example", "api.github.com", "example.com", "192.0.2.1"}
 _SCOPES = {"contents:read", "unbounded", "unknown"}
 _TTLS = {"1d", "none", "unknown"}
 _SOURCES = {"mock", "github", "squid", "none"}

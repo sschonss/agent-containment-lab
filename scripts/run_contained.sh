@@ -3,19 +3,26 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p var/logs var/none
 
-if [[ -z "${GITHUB_TOKEN:-}" || -z "${GITHUB_REPO:-}" ]]; then
+token_source=none
+if [[ -n "${LAB_GITHUB_PAT:-}" ]]; then
+  token_source=LAB_GITHUB_PAT
+elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  token_source=GITHUB_TOKEN
+fi
+if [[ "$token_source" == none ]]; then
   if [[ "${CREDENTIAL_MODE:-}" == "live" ]]; then
-    echo "CREDENTIAL_MODE=live requires GITHUB_TOKEN and GITHUB_REPO"
+    echo "CREDENTIAL_MODE=live requires LAB_GITHUB_PAT or GITHUB_TOKEN"
     exit 2
   fi
   export CREDENTIAL_MODE=mock
 else
   export CREDENTIAL_MODE="${CREDENTIAL_MODE:-live}"
+  export GITHUB_REPO="${GITHUB_REPO:-sschonss/agent-containment-lab}"
 fi
-if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-  echo "credential_mode=${CREDENTIAL_MODE} token_set=yes"
+if [[ "$token_source" == none ]]; then
+  echo "credential_mode=${CREDENTIAL_MODE} token_set=no token_source=none"
 else
-  echo "credential_mode=${CREDENTIAL_MODE} token_set=no"
+  echo "credential_mode=${CREDENTIAL_MODE} token_set=yes token_source=${token_source} repo=${GITHUB_REPO}"
 fi
 
 before=0

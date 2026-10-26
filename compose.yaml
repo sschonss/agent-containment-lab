@@ -171,6 +171,8 @@ services:
       WORKSPACE: /workspace
       PRINCIPAL_ID: ${PRINCIPAL_ID:-schons}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
     volumes:
       - ./workspace:/workspace:ro
     networks:
@@ -194,9 +196,12 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       HTTP_PROXY: http://squid:3128
       HTTPS_PROXY: http://squid:3128
-      NO_PROXY: otel-collector,localhost,127.0.0.1
+      NO_PROXY: otel-collector,ollama,localhost,127.0.0.1
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      LAB_GITHUB_PAT: ${LAB_GITHUB_PAT:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      GITHUB_REPO: ${GITHUB_REPO:-}
+      GITHUB_REPO: ${GITHUB_REPO:-sschonss/agent-containment-lab}
       CREDENTIAL_MODE: ${CREDENTIAL_MODE:-}
     volumes:
       - ./workspace:/workspace:ro
@@ -208,6 +213,27 @@ services:
       - otel-collector
       - squid
 
+  ollama:
+    profiles: ["llm"]
+    image: ollama/ollama:0.12.6@sha256:a61a8fd395dbb931cc8cb1b5da7a2510746575c87113fdc45b647ee59ef7f808
+    environment:
+      OLLAMA_KEEP_ALIVE: "30m"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    networks:
+      - obs
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
 networks:
   obs:
   lab:
@@ -217,3 +243,4 @@ volumes:
   tempo-data:
   prometheus-data:
   grafana-data:
+  ollama-models:
