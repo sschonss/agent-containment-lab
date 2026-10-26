@@ -269,7 +269,29 @@ Esse 403 não é do GitHub. A nota diz que foi sintetizado localmente. Span `cre
 }
 ```
 
-O caminho ao vivo (`PUT` em `api.github.com` com PAT fine-grained, Contents só leitura, um repositório, um dia) está implementado e documentado no README. Ele não foi executado: não há token descartável nesta VM. Não dá para afirmar um 403 real da API.
+O mock acima é o caminho offline. A mensagem `Resource not accessible by integration` foi sintetizada nesta VM. Ela não veio da API.
+
+### Corrida real do PAT, fora da VM
+
+O mantenedor rodou isto fora desta VM, em 2026-10-26T10:39:20-03:00, porque o token não pode ser encaminhado para o agente. Fine-grained PAT, só o repositório `sschonss/agent-containment-lab`, Contents read-only, expiração curta. Comando: `curl -H "Authorization: Bearer $LAB_GITHUB_PAT"`. A saída abaixo é a que ele colou, verbatim. O arquivo do PUT nessa corrida foi `pwned.txt`. A sonda do lab, quando há token, usa `lab-probe-do-not-merge.txt`.
+
+```text
+== READ: GET /repos/sschonss/agent-containment-lab/contents/README.md
+HTTP 200
+name=README.md size=123
+x-accepted-github-permissions: contents=read
+== WRITE (expected 403): PUT /repos/sschonss/agent-containment-lab/contents/pwned.txt
+HTTP 403
+{
+  "message": "Resource not accessible by personal access token",
+  "documentation_url": "https://docs.github.com/rest/repos/contents#create-or-update-file-contents",
+  "status": "403"
+}
+
+x-accepted-github-permissions: contents=write; contents=write,workflows=write
+```
+
+A leitura passou (HTTP 200, `contents=read`). A escrita voltou HTTP 403 com `Resource not accessible by personal access token`. O header da escrita pede `contents=write`. Nenhuma das duas respostas trouxe `github-authentication-token-expiration`, então a expiração não deu para mostrar a partir dos headers. Na sonda do lab, esse caso imprime `credential.expiration=absent`. O mock continua sendo o que roda sem token, no Wi-Fi do evento.
 
 ## Controle 4 — spans sem segredo
 
@@ -340,7 +362,7 @@ Isto aconteceu antes da corrida limpa. A corrida acima já inclui as correções
 - O agente de `make insecure` e `make contained` executa o JSON do `AGENTS.md`. Não é um modelo e não improvisa outro caminho. O `make llm` com `qwen2.5:3b` está na seção seguinte.
 - `http_post` e o `curl` do modo inseguro só aceitam `http://attacker.example` na porta 80. O repositório não é um cliente de SSRF genérico. A porta aberta da demo é a ferramenta existir e a rede até o atacante existir.
 - Os spans de `--network none` são emitidos por outro processo. O container isolado não alcança o Collector. O span do nome fica `name_resolution`. O span `network.fallback.literal` fica `network_unreachable`.
-- Sem token, o 403 da credencial é mock. O GET e o PUT reais contra um PAT fine-grained não rodaram. A sonda já lê `LAB_GITHUB_PAT` (ou `GITHUB_TOKEN`) e, com token, chama `sschonss/agent-containment-lab`.
+- Sem token, o 403 da credencial é mock (`Resource not accessible by integration`, sintetizado). O GET 200 e o PUT 403 reais estão na seção de credencial: o mantenedor rodou o curl fora desta VM. O header `github-authentication-token-expiration` não veio nessa resposta.
 - O Squid é proxy de aplicação. O `--network none` é o controle que continua valendo se o processo ignorar `HTTP_PROXY` ou se a ACL for aberta.
 - O processor `redaction` não mascara segredo que caia dentro de uma chave permitida. O teste de marcador existe para falhar nesse caso. Se `service.name` sair da allowlist do Collector, o Tempo volta a ingerir traces sem o atributo de busca.
 - A imagem do agente carrega os marcadores em `fixtures/`. Quem inspecionar a imagem vê as strings falsas. Elas não são credencial.
@@ -361,7 +383,7 @@ spans=29 denied=17 blocked=7 markers=0 profile=contained
 profile contained ok
 ```
 
-O mock continua sem chamar o GitHub. Não havia `LAB_GITHUB_PAT` nem `GITHUB_TOKEN`. O GET de `README.md` e o PUT em `sschonss/agent-containment-lab` não rodaram. A saída já tem `credential.read_status=skipped` e `credential.expiration=absent` para quando o token chegar.
+O mock desta VM continua sem chamar o GitHub. Não havia `LAB_GITHUB_PAT` nem `GITHUB_TOKEN` aqui. O GET 200 e o PUT 403 reais estão na seção de credencial, medidos pelo mantenedor fora da VM. `credential.expiration=absent` é o que a sonda imprime quando o header de expiração não vem, que foi o caso dessa corrida real.
 
 Span `network.fallback.literal`, trace `f20c89acae7389e05ce0f0ff820c5733`, copiado de `var/otel/traces.json`:
 
