@@ -1,0 +1,47 @@
+{
+  "uid": "containment",
+  "title": "Contencao do agente",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "tags": ["lab", "agents"],
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Chamadas por ferramenta e allowlist",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tool_name, tool_allowed) (agent_traces_span_metrics_calls_total)",
+          "legendFormat": "{{tool_name}} allowed={{tool_allowed}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Egress bloqueado",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (network_mode, error_kind) (agent_traces_span_metrics_calls_total{egress_blocked=\"true\"})",
+          "legendFormat": "{{network_mode}} {{error_kind}}"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Traces",
+      "gridPos": {"h": 4, "w": 24, "x": 0, "y": 8},
+      "options": {
+        "mode": "markdown",
+        "content": "No Explore, abra o datasource Tempo e busque `service.name=coding-agent`. Atributos uteis: `tool.name`, `tool.allowed`, `egress.blocked`, `principal.id`."
+      }
+    }
+  ]
+}
