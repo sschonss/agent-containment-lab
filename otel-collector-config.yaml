@@ -1,0 +1,96 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  batch:
+    send_batch_size: 8
+    timeout: 200ms
+  redaction:
+    allow_all_keys: false
+    allowed_keys:
+      - service.name
+      - service.version
+      - telemetry.sdk.language
+      - telemetry.sdk.name
+      - telemetry.sdk.version
+      - tool.name
+      - tool.allowed
+      - egress.blocked
+      - principal.id
+      - lab.mode
+      - mcp.method
+      - error.kind
+      - http.status_code
+      - http.host
+      - network.mode
+      - file.path
+      - credential.mocked
+      - credential.scope
+      - credential.ttl
+      - credential.source
+    summary: silent
+
+connectors:
+  spanmetrics:
+    namespace: traces.span.metrics
+    metrics_flush_interval: 5s
+    histogram:
+      disable: true
+    exemplars:
+      enabled: false
+    dimensions:
+      - name: tool.name
+      - name: tool.allowed
+      - name: egress.blocked
+      - name: principal.id
+      - name: lab.mode
+      - name: error.kind
+      - name: network.mode
+    resource_metrics_key_attributes:
+      - service.name
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    namespace: agent
+    enable_open_metrics: true
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+    timeout: 5s
+  file:
+    path: /var/lib/otel/traces.json
+    append: true
+    flush_interval: 1s
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, redaction, batch]
+      exporters: [otlp/tempo, file, spanmetrics]
+    metrics:
+      receivers: [otlp, spanmetrics]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]

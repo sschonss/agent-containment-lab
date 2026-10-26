@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+!workspace/.env
+var/
+*.log
+__pycache__/
+.pytest_cache/
+.playwright-mcp/
+*.pyc
+.python-version

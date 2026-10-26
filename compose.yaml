@@ -1,0 +1,219 @@
+name: agent-containment-lab
+
+services:
+  tempo-init:
+    image: python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+    user: "0:0"
+    entrypoint: ["chown", "-R", "10001:10001", "/var/tempo"]
+    volumes:
+      - tempo-data:/var/tempo
+    restart: "no"
+
+  tempo:
+    image: grafana/tempo:2.8.2@sha256:0ef775495967cd5d7a6b2e146b6ea695d624803c8db8349fb8ce4164f719f9b7
+    user: "10001:10001"
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
+    depends_on:
+      tempo-init:
+        condition: service_completed_successfully
+    networks:
+      - obs
+    healthcheck:
+      test: ["CMD", "/busybox/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3200/ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.136.0@sha256:45392d534c1edcc809c2d112394029246bc679d2ae5ea7081414a1fc74f2c621
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./var/otel:/var/lib/otel
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:9464:9464"
+      - "127.0.0.1:13133:13133"
+    depends_on:
+      tempo:
+        condition: service_healthy
+    networks:
+      - obs
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=1d"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    healthcheck:
+      test: ["CMD", "/bin/wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks:
+      - obs
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.1.1@sha256:a1701c2180249361737a99a01bc770db39381640e4d631825d38ff4535efa47d
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/bin/wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    networks:
+      - obs
+    restart: unless-stopped
+
+  attacker:
+    image: agent-containment-lab-runtime:0.1.0
+    command: ["lab.attacker"]
+    user: "10001:10001"
+    cap_add:
+      - NET_BIND_SERVICE
+    environment:
+      PORT: "80"
+      RECEIPT_PATH: /data/received.jsonl
+    volumes:
+      - ./var/attacker:/data
+    networks:
+      lab:
+        aliases:
+          - attacker.example
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1/health', timeout=2)",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    restart: unless-stopped
+
+  squid:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    image: agent-containment-lab-squid:0.1.0
+    extra_hosts:
+      - "attacker.example:127.0.0.1"
+      - "example.com:127.0.0.1"
+    ports:
+      - "127.0.0.1:3128:3128"
+    networks:
+      - proxy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -o /dev/null -w '%{http_code}' --max-time 3 --connect-timeout 2 -x http://127.0.0.1:3128 http://example.com/ | grep -qx 403",
+        ]
+      interval: 2s
+      timeout: 4s
+      retries: 20
+      start_period: 8s
+    restart: unless-stopped
+
+  runtime:
+    profiles: ["manual"]
+    image: agent-containment-lab-runtime:0.1.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["lab.agent"]
+    networks:
+      - obs
+
+  insecure:
+    profiles: ["demo"]
+    image: agent-containment-lab-runtime:0.1.0
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    environment:
+      MODE: insecure
+      WORKSPACE: /workspace
+      PRINCIPAL_ID: ${PRINCIPAL_ID:-schons}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - ./workspace:/workspace:ro
+    networks:
+      - obs
+      - lab
+    depends_on:
+      - otel-collector
+      - attacker
+
+  contained:
+    profiles: ["demo"]
+    image: agent-containment-lab-runtime:0.1.0
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    environment:
+      MODE: contained
+      WORKSPACE: /workspace
+      PRINCIPAL_ID: ${PRINCIPAL_ID:-schons}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      HTTP_PROXY: http://squid:3128
+      HTTPS_PROXY: http://squid:3128
+      NO_PROXY: otel-collector,localhost,127.0.0.1
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPO: ${GITHUB_REPO:-}
+      CREDENTIAL_MODE: ${CREDENTIAL_MODE:-}
+    volumes:
+      - ./workspace:/workspace:ro
+      - ./var/none:/out
+    networks:
+      - obs
+      - proxy
+    depends_on:
+      - otel-collector
+      - squid
+
+networks:
+  obs:
+  lab:
+  proxy:
+
+volumes:
+  tempo-data:
+  prometheus-data:
+  grafana-data:
